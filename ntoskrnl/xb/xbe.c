@@ -2121,21 +2121,205 @@ XeNtCreateSemaphore(PHANDLE SemaphoreHandle, PXBE_OBJECT_ATTRIBUTES XAttr,
     return status;
 }
 
-/* Read an EEPROM setting.  No EEPROM/SMC subsystem yet -- return zeros with
- * the requested length reported back (asserted by libcs seeding rand_s
- * with the 256-byte whole-image read at ValueIndex 0xFFFF). */
-NTSTATUS NTAPI
-ExQueryNonVolatileSetting(ULONG ValueIndex, PULONG Type, PVOID Value,
-                              ULONG ValueLength, PULONG ResultLength)
+/* 256-byte EEPROM shadow cached */
+static UCHAR XeEepromCache[256];
+static volatile LONG XeEepromCached = 0;
+
+static VOID
+XeEnsureEepromCached(VOID)
 {
-    UNREFERENCED_PARAMETER(ValueIndex);
+    if (InterlockedCompareExchange(&XeEepromCached, 1, 0) != 0)
+        return;
+
+    ULONG i;
+    for (i = 0; i < 256; i++)
+    {
+        UCHAR b = 0;
+        if (NT_SUCCESS(HalpXboxSmBusReadByte(0x54, (UCHAR)i, &b)))
+            XeEepromCache[i] = b;
+        else
+            XeEepromCache[i] = 0;
+    }
+}
+
+struct XcSettingEntry
+{
+    USHORT Offset;
+    USHORT Size;
+    ULONG Type;
+};
+
+/* Setting index map (XC_* constants) */
+static const struct XcSettingEntry XcSettingsMap[] = {
+    [0x00] = {0x64, 4, 4}, /* XC_TIMEZONE_BIAS                 (REG_DWORD) */
+    [0x01] = {0x68, 4, 3}, /* XC_TZ_STD_NAME                   (REG_BINARY/SZ) "GMT" */
+    [0x02] = {0x78, 4, 3}, /* XC_TZ_STD_DATE                   (REG_BINARY) 0A 05 00 02 */
+    [0x03] = {0x80, 4, 4}, /* XC_TZ_STD_BIAS                   (REG_DWORD) 0x00000000 */
+    [0x04] = {0x6C, 4, 3}, /* XC_TZ_DLT_NAME                   (REG_BINARY/SZ) "BST" */
+    [0x05] = {0x7C, 4, 3}, /* XC_TZ_DLT_DATE                   (REG_BINARY) 03 05 00 01 */
+    [0x06] = {0x84, 4, 4}, /* XC_TZ_DLT_BIAS                   (REG_DWORD) 0xFFFFFFC4 */
+    [0x07] = {0x88, 4, 4}, /* XC_LANGUAGE                      (REG_DWORD) 0x00000001 */
+    [0x08] = {0x8C, 4, 4}, /* XC_VIDEO                         (REG_DWORD) 0x00000000 */
+    [0x09] = {0x90, 4, 4}, /* XC_AUDIO                         (REG_DWORD) 0x00000000 */
+    [0x0A] = {0x94, 4, 4}, /* XC_P_CONTROL_GAMES               (REG_DWORD) 0x00000000 */
+    [0x0B] = {0x98, 4, 4}, /* XC_P_CONTROL_PASSWORD            (REG_DWORD) 0x00000000 */
+    [0x0C] = {0x9C, 4, 4}, /* XC_P_CONTROL_MOVIES              (REG_DWORD) 0x00000000 */
+    [0x0D] = {0xA0, 4, 4}, /* XC_ONLINE_IP_ADDRESS             (REG_DWORD) 0x00000000 */
+    [0x0E] = {0xA4, 4, 4}, /* XC_ONLINE_DNS_ADDRESS            (REG_DWORD) 0x00000000 */
+    [0x0F] = {0xA8, 4, 4}, /* XC_ONLINE_DEFAULT_GATEWAY_ADDRESS (REG_DWORD) 0x00000000 */
+    [0x10] = {0xAC, 4, 4}, /* XC_ONLINE_SUBNET_ADDRESS         (REG_DWORD) 0x00000000 */
+    [0x11] = {0xB0, 4, 4}, /* XC_MISC                          (REG_DWORD) 0x00000000 */
+    [0x12] = {0xB4, 4, 4}, /* XC_DVD_REGION                    (REG_DWORD) 0x00000000 */
+};
+
+static const struct XcSettingEntry XcFactorySettingsMap[] = {
+    [0x00] = {0x34, 12, 3}, /* XC_FACTORY_SERIAL_NUMBER        (REG_BINARY/SZ) */
+    [0x01] = {0x40, 6, 3},  /* XC_FACTORY_ETHERNET_ADDR        (REG_BINARY) */
+    [0x02] = {0x48, 16, 3}, /* XC_FACTORY_ONLINE_KEY           (REG_BINARY) */
+    [0x03] = {0x58, 4, 4},  /* XC_FACTORY_AV_REGION            (REG_DWORD) */
+    [0x04] = {0x5C, 4, 4},  /* XC_FACTORY_GAME_REGION          (REG_DWORD) */
+};
+
+/* Read an EEPROM setting from the cached 256-byte shadow. */
+NTSTATUS NTAPI
+ExQueryNonVolatileSetting(ULONG ValueIndex, PULONG Type, PVOID Value, ULONG ValueLength, PULONG ResultLength)
+{
+    XeEnsureEepromCached();
+
+    ULONG offset = 0;
+    ULONG size = 0;
+    ULONG regType = 0;
+
+    if (ValueIndex == 0xFFFF || ValueIndex >= 0x10000)
+    {
+        offset = 0;
+        size = 256;
+        regType = 3; /* REG_BINARY */
+    }
+    else if (ValueIndex < sizeof(XcSettingsMap) / sizeof(XcSettingsMap[0]) && XcSettingsMap[ValueIndex].Size != 0)
+    {
+        offset = XcSettingsMap[ValueIndex].Offset;
+        size = XcSettingsMap[ValueIndex].Size;
+        regType = XcSettingsMap[ValueIndex].Type;
+    }
+    else if (
+        ValueIndex >= 0x0100 &&
+        (ValueIndex - 0x0100) < sizeof(XcFactorySettingsMap) / sizeof(XcFactorySettingsMap[0]) &&
+        XcFactorySettingsMap[ValueIndex - 0x0100].Size != 0)
+    {
+        offset = XcFactorySettingsMap[ValueIndex - 0x0100].Offset;
+        size = XcFactorySettingsMap[ValueIndex - 0x0100].Size;
+        regType = XcFactorySettingsMap[ValueIndex - 0x0100].Type;
+    }
+    else
+    {
+        if (Value != NULL && ValueLength != 0)
+            RtlZeroMemory(Value, ValueLength);
+        if (Type != NULL)
+            *Type = 0;
+        if (ResultLength != NULL)
+            *ResultLength = 0;
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+
+    if (ResultLength != NULL)
+        *ResultLength = (ValueLength < size) ? 0 : size;
+
+    if (ValueLength < size)
+    {
+        if (Value != NULL && ValueLength != 0)
+            RtlZeroMemory(Value, ValueLength);
+        if (Type != NULL)
+            *Type = 0;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
 
     if (Value != NULL && ValueLength != 0)
+    {
         RtlZeroMemory(Value, ValueLength);
+        RtlCopyMemory(Value, &XeEepromCache[offset], size);
+    }
+
     if (Type != NULL)
-        *Type = 0;
-    if (ResultLength != NULL)
-        *ResultLength = ValueLength;
+        *Type = regType;
+
+    return STATUS_SUCCESS;
+}
+
+/* Save a non-volatile EEPROM setting to shadow cache and EEPROM device. */
+NTSTATUS NTAPI
+ExSaveNonVolatileSetting(ULONG ValueIndex, ULONG Type, PVOID Value, ULONG ValueLength)
+{
+    XeEnsureEepromCached();
+
+    ULONG offset = 0;
+    ULONG size = 0;
+
+    if (ValueIndex == 0xFFFF || ValueIndex >= 0x10000)
+    {
+        offset = 0;
+        size = 256;
+    }
+    else if (ValueIndex < sizeof(XcSettingsMap) / sizeof(XcSettingsMap[0]) && XcSettingsMap[ValueIndex].Size != 0)
+    {
+        offset = XcSettingsMap[ValueIndex].Offset;
+        size = XcSettingsMap[ValueIndex].Size;
+    }
+    else if (
+        ValueIndex >= 0x0100 &&
+        (ValueIndex - 0x0100) < sizeof(XcFactorySettingsMap) / sizeof(XcFactorySettingsMap[0]) &&
+        XcFactorySettingsMap[ValueIndex - 0x0100].Size != 0)
+    {
+        offset = XcFactorySettingsMap[ValueIndex - 0x0100].Offset;
+        size = XcFactorySettingsMap[ValueIndex - 0x0100].Size;
+    }
+    else
+    {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+
+    if (ValueLength < size || Value == NULL)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlCopyMemory(&XeEepromCache[offset], Value, size);
+
+    /* Write modified bytes to physical SMBus EEPROM at address 0x54 */
+    ULONG i;
+    for (i = 0; i < size; i++)
+    {
+        HalpXboxSmBusWriteByte(0x54, (UCHAR)(offset + i), ((PUCHAR)Value)[i]);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/* Read or write the refurb info block in the EEPROM. */
+NTSTATUS NTAPI
+ExReadWriteRefurbInfo(PVOID Value, ULONG ValueLength, BOOLEAN WriteRefurbInfo)
+{
+    XeEnsureEepromCached();
+
+    if (Value == NULL || ValueLength == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Refurb info section in EEPROM starts at offset 0xC0 (length up to 64 bytes) */
+    ULONG maxLen = 64;
+    ULONG len = ValueLength < maxLen ? ValueLength : maxLen;
+
+    if (WriteRefurbInfo)
+    {
+        RtlCopyMemory(&XeEepromCache[0xC0], Value, len);
+        ULONG i;
+        for (i = 0; i < len; i++)
+        {
+            HalpXboxSmBusWriteByte(0x54, (UCHAR)(0xC0 + i), ((PUCHAR)Value)[i]);
+        }
+    }
+    else
+    {
+        RtlCopyMemory(Value, &XeEepromCache[0xC0], len);
+    }
+
     return STATUS_SUCCESS;
 }
 
