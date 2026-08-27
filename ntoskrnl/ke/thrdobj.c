@@ -839,6 +839,11 @@ KeInitThread(IN OUT PKTHREAD Thread,
     Thread->Teb = Teb;
     Thread->Process = Process;
 
+#ifdef SARCH_XBOX
+    /* Enforce a floor of KERNEL_STACK_SIZE (12 KB) matching retail Xbox kernel. */
+    if (StackSize < KERNEL_STACK_SIZE) StackSize = KERNEL_STACK_SIZE;
+#endif
+
     /* Check if we have a kernel stack */
     if (!KernelStack)
     {
@@ -857,8 +862,12 @@ KeInitThread(IN OUT PKTHREAD Thread,
      * stack. */
     Thread->InitialStack = KernelStack;
     Thread->StackBase = KernelStack;
+#ifdef SARCH_XBOX
+    Thread->StackLimit = (ULONG_PTR)KernelStack - StackSize;
+#else
     Thread->StackLimit = (ULONG_PTR)KernelStack -
                          (StackSize ? StackSize : KERNEL_STACK_SIZE);
+#endif
     Thread->XeStackSize = StackSize;
     Thread->KernelStackResident = TRUE;
 

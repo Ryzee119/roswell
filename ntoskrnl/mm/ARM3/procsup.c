@@ -222,7 +222,12 @@ MmDeleteKernelStackEx(IN PVOID StackBase,
     // If this is a small default-sized stack, just push the stack onto the dead
     // stack S-LIST.  Non-default-sized stacks bypass the cache.
     //
+#ifdef SARCH_XBOX
+    if (StackSize < KERNEL_STACK_SIZE) StackSize = KERNEL_STACK_SIZE;
+    if (!GuiStack && StackSize == KERNEL_STACK_SIZE)
+#else
     if (!GuiStack && (StackSize == 0 || StackSize == KERNEL_STACK_SIZE))
+#endif
     {
         if (ExQueryDepthSList(&MmDeadStackSListHead) < MmMaximumDeadKernelStacks)
         {
@@ -235,8 +240,12 @@ MmDeleteKernelStackEx(IN PVOID StackBase,
     //
     // Calculate pages used
     //
+#ifdef SARCH_XBOX
+    StackPages = BYTES_TO_PAGES(GuiStack ? MmLargeStackSize : StackSize);
+#else
     StackPages = BYTES_TO_PAGES(GuiStack ? MmLargeStackSize :
                                 (StackSize ? StackSize : KERNEL_STACK_SIZE));
+#endif
 
     /* Acquire the PFN lock */
     OldIrql = MiAcquirePfnLock();
@@ -342,7 +351,11 @@ MmCreateKernelStackEx(IN BOOLEAN GuiStack,
         // If a custom size was requested, honor it.  Otherwise fall back to the
         // default stack size and consult the dead-stack S-LIST cache.
         //
+#ifdef SARCH_XBOX
+        if (StackSize < KERNEL_STACK_SIZE) StackSize = KERNEL_STACK_SIZE;
+#else
         if (StackSize == 0) StackSize = KERNEL_STACK_SIZE;
+#endif
 
         if (StackSize == KERNEL_STACK_SIZE &&
             ExQueryDepthSList(&MmDeadStackSListHead))
