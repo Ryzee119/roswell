@@ -20,6 +20,7 @@
 #include "nxldr.h"
 #include "paging.h"
 #include "pe.h"
+#include "smc.h"
 #include "xz/xz.h"
 
 /* GDB-visible sentinels. */
@@ -111,6 +112,9 @@ LoaderMain(void)
 {
     const void *KernelImage;
     ULONG EntryVa;
+
+    /* Respond to SMC challenge immediately upon entering RAM */
+    xbox_smc_challenge_response();
 
     DBG_SERIAL_INIT();
     dprintf("\nLoaderMain entered\n");

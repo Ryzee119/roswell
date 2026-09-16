@@ -16,6 +16,15 @@ typedef void VOID;
 typedef void *PVOID;
 typedef UCHAR *PUCHAR;
 typedef ULONG *PULONG;
+typedef unsigned char BOOLEAN, *PBOOLEAN;
+
+#ifndef TRUE
+#define TRUE 1
+#endif
+
+#ifndef FALSE
+#define FALSE 0
+#endif
 
 #ifndef NULL
 #define NULL ((PVOID)0)

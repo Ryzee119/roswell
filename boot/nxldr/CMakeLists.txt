@@ -59,6 +59,7 @@ set(NXLDR_HEADERS
     ${NXLDR_SRC_DIR}/pe.h
     ${NXLDR_SRC_DIR}/paging.h
     ${NXLDR_SRC_DIR}/boot-layout.h
+    ${NXLDR_SRC_DIR}/smc.h
 )
 
 # startup.S -- the reset path + .low_rom prologue (assembly entry).
@@ -76,6 +77,7 @@ set(NXLDR_SOURCES
     mem.c
     pe.c
     paging.c
+    smc.c
     xz/xz_crc32.c
     xz/xz_dec_lzma2.c
     xz/xz_dec_stream.c
