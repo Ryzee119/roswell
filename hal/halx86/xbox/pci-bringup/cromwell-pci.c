@@ -387,7 +387,7 @@ void BootPciPeripheralInitialization(void)
 	/* Host bridge 0:0.0 reg 0x48, 0x44, and memory limit */
 	PciWriteDword(BUS_0, DEV_0, FUNC_0, 0x48, 0x00000114);
 	PciWriteDword(BUS_0, DEV_0, FUNC_0, 0x44, 0x80000000);
-	PciWriteByte(BUS_0, DEV_0, FUNC_0, 0x87, 0x03);
+	//PciWriteByte(BUS_0, DEV_0, FUNC_0, 0x87, 0x03);
 
 	/* NV2A GPU reg 0x4C */
 	PciWriteDword(BUS_1, DEV_0, FUNC_0, 0x4c, 0x00000114);
