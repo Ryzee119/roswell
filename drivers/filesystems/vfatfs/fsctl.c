@@ -60,7 +60,16 @@ VfatHasFileSystem(
         return Status;
     }
 
+#ifdef SARCH_XBOX
+    /* On Xbox, all FATX volumes reside on the internal hard disk (or
+     * Memory Units). FixedMedia must always be TRUE: classpnp and disk.sys
+     * do not implement IOCTL_DISK_CHECK_VERIFY on Xbox (see class.c:8092),
+     * so treating media as removable causes VfatCreateFile to fail with
+     * STATUS_INVALID_DEVICE_REQUEST (0xC0000010) on every file open. */
+    FatInfo.FixedMedia = TRUE;
+#else
     FatInfo.FixedMedia = DiskGeometry.MediaType == FixedMedia ? TRUE : FALSE;
+#endif
     if (DiskGeometry.MediaType == FixedMedia || DiskGeometry.MediaType == RemovableMedia)
     {
         // We have found a hard disk
