@@ -227,13 +227,6 @@ NxConfigurePciDevices(VOID)
     PciCfgWrite32(NX_BRIDGE_BUS, NX_BRIDGE_SLOT, 0, 0x2C, 0x00000000);
     PciCfgWrite32(NX_BRIDGE_BUS, NX_BRIDGE_SLOT, 0, 0x30, 0x00000000);
 
-    /* Enable I/O, memory, and (where retail does so) bus-master decoding. */
-    for (i = 0; i < RTL_NUMBER_OF(NxPciDevices); i++)
-    {
-        PciCfgWrite16(NxPciDevices[i].Bus, NxPciDevices[i].Slot,
-                         NxPciDevices[i].Func, 0x04, NxPciDevices[i].Cmd);
-    }
-
     /* Ported cromwell bring-up: programs the AGP bridge, DMA controller,
      * ACPI block, SMC audio enable and the chipset/IDE/AC97 registers in
      * one shot.  Replaces our hand-written delta helpers.
@@ -243,6 +236,17 @@ NxConfigurePciDevices(VOID)
      * mapped into kernel VA until NxkMmEnsureXboxWindows runs much later. */
     BootAGPBUSInitialization();
     BootPciPeripheralInitialization();
+
+    /* Enable I/O, memory, and (where retail does so) bus-master decoding.
+     * This MUST run AFTER BootAGPBUSInitialization() / BootPciPeripheralInitialization()
+     * because BootAGPBUSInitialization() toggles Host Bridge 0:0.0 reg 0x6C
+     * (MCPX Southbridge link reset), which clears all PCI command registers
+     * back to 0000. */
+    for (i = 0; i < RTL_NUMBER_OF(NxPciDevices); i++)
+    {
+        PciCfgWrite16(NxPciDevices[i].Bus, NxPciDevices[i].Slot,
+                         NxPciDevices[i].Func, 0x04, NxPciDevices[i].Cmd);
+    }
 
     DPRINT1("PCI configuration programmed to the retail layout\n");
 }
